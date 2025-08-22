@@ -1,0 +1,296 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1" />
+  <title>Ping Pong — Touch Controls (Single File)</title>
+  <style>
+    :root{--bg:#0b1320;--fg:#e6eef8;--accent:#ff6b6b}
+    html,body{height:100%;margin:0;font-family:Inter,system-ui,Segoe UI,Roboto,Arial}
+    .app{display:flex;flex-direction:column;height:100%;align-items:center;justify-content:center;background:linear-gradient(180deg,#071026, #071a2a);color:var(--fg)}
+    canvas{background:#071122;border-radius:12px;box-shadow:0 8px 30px rgba(0,0,0,.6)}
+    .hud{width:100%;max-width:900px;display:flex;justify-content:space-between;align-items:center;margin:12px 0}
+    .btn{background:rgba(255,255,255,.06);padding:8px 12px;border-radius:8px;border:1px solid rgba(255,255,255,.06);backdrop-filter: blur(4px);cursor:pointer}
+    .controls{position:relative;max-width:900px;width:100%;display:flex;justify-content:center;margin-top:12px}
+    /* touch buttons */
+    .touch-pad{position:relative;width:100%;max-width:900px;height:120px;margin-top:12px}
+    .touch-button{position:absolute;bottom:18px;width:82px;height:82px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:20px;color:var(--fg);background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.05);touch-action:none;user-select:none}
+    .touch-button.small{width:64px;height:64px}
+    .left-up{left:24px}
+    .left-down{left:24px;bottom:18px}
+    .right-up{right:24px}
+    .right-down{right:24px;bottom:18px}
+    .overlay-note{font-size:13px;opacity:.7}
+    .score{font-weight:700;font-size:18px}
+    /* responsive canvas */
+    @media (max-width:600px){
+      .touch-button{width:74px;height:74px}
+      .touch-pad{height:110px}
+    }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <div class="hud">
+      <div class="score">Player: <span id="scoreP">0</span> &nbsp; — &nbsp; CPU: <span id="scoreC">0</span></div>
+      <div>
+        <button id="startBtn" class="btn">Start / Resume</button>
+        <button id="resetBtn" class="btn">Reset</button>
+      </div>
+    </div>
+
+    <canvas id="game" width="900" height="520"></canvas>
+
+    <div class="touch-pad" id="touchPad">
+      <!-- Left player controls (touch on mobile) -->
+      <div class="touch-button left-up" id="pUp">▲</div>
+      <div class="touch-button left-down" id="pDown">▼</div>
+      <!-- Right player controls (optional) - here for two-player on same device -->
+      <div class="touch-button right-up" id="rUp">▲</div>
+      <div class="touch-button right-down" id="rDown">▼</div>
+    </div>
+
+    <div style="margin-top:10px;color:rgba(255,255,255,.55);font-size:13px">Use touch buttons or drag the left paddle. Keyboard: W/S or ↑/↓ to move. (Mobile-friendly)</div>
+  </div>
+
+  <script>
+    // Simple Pong / PingPong game with touch buttons and drag support
+    const canvas = document.getElementById('game')
+    const ctx = canvas.getContext('2d')
+
+    // Responsive sizing
+    function fitCanvas(){
+      const maxW = Math.min(window.innerWidth - 32, 900)
+      const maxH = Math.min(window.innerHeight - 220, 520)
+      const ratio = canvas.height / canvas.width
+      canvas.width = maxW
+      canvas.height = Math.max(260, Math.floor(maxW * ratio))
+    }
+    window.addEventListener('resize', fitCanvas)
+    fitCanvas()
+
+    // Game objects
+    const paddleWidth = 14
+    const paddleHeight = 90
+    const ballRadius = 9
+
+    let player = {x:20, y: (canvas.height - paddleHeight)/2, w:paddleWidth, h:paddleHeight, dy:0}
+    let cpu = {x: canvas.width - 20 - paddleWidth, y: (canvas.height - paddleHeight)/2, w:paddleWidth, h:paddleHeight}
+    let ball = {x: canvas.width/2, y: canvas.height/2, vx:5, vy:3, r: ballRadius}
+
+    let running = false
+    let scoreP = 0, scoreC = 0
+
+    const scorePElem = document.getElementById('scoreP')
+    const scoreCElem = document.getElementById('scoreC')
+
+    function resetBall(direction = 1){
+      ball.x = canvas.width/2
+      ball.y = canvas.height/2
+      const speed = 5 + Math.min(3, Math.floor(Math.max(scoreP, scoreC)/2))
+      // randomize angle a bit
+      const angle = (Math.random()*0.6 - 0.3)
+      ball.vx = speed * direction
+      ball.vy = speed * angle
+    }
+
+    function resetGame(){
+      scoreP = 0; scoreC = 0
+      scorePElem.textContent = scoreP
+      scoreCElem.textContent = scoreC
+      running = false
+      player.y = (canvas.height - paddleHeight)/2
+      cpu.y = (canvas.height - paddleHeight)/2
+      resetBall( Math.random()>0.5 ? 1 : -1 )
+      draw()
+    }
+
+    // basic AI for cpu
+    function updateCPU(){
+      const speed = 4 + Math.min(3, Math.floor(Math.abs(scoreP-scoreC)/2))
+      const center = cpu.y + cpu.h/2
+      if(ball.y < center - 10) cpu.y -= speed
+      else if(ball.y > center + 10) cpu.y += speed
+      // clamp
+      cpu.y = Math.max(0, Math.min(canvas.height - cpu.h, cpu.y))
+    }
+
+    function clampPaddles(){
+      player.y = Math.max(0, Math.min(canvas.height - player.h, player.y))
+      cpu.y = Math.max(0, Math.min(canvas.height - cpu.h, cpu.y))
+    }
+
+    function update(){
+      if(!running) return
+      // move player via dy
+      player.y += player.dy
+      clampPaddles()
+
+      // move ball
+      ball.x += ball.vx
+      ball.y += ball.vy
+
+      // collisions top/bottom
+      if(ball.y - ball.r < 0){ ball.y = ball.r; ball.vy *= -1 }
+      if(ball.y + ball.r > canvas.height){ ball.y = canvas.height - ball.r; ball.vy *= -1 }
+
+      // paddle collisions
+      function hitPaddle(p){
+        if(ball.x - ball.r < p.x + p.w && ball.x + ball.r > p.x && ball.y + ball.r > p.y && ball.y - ball.r < p.y + p.h){
+          // reflect
+          const intersectY = (ball.y - (p.y + p.h/2))
+          const normalized = intersectY / (p.h/2)
+          const maxBounce = 5.5
+          const speed = Math.min(12, Math.hypot(ball.vx, ball.vy) + 0.6)
+          const dir = (p === player) ? 1 : -1
+          ball.vx = dir * speed * Math.cos(normalized * 0.7)
+          ball.vy = speed * normalized
+          // nudge out so it doesn't stick
+          if(p === player) ball.x = p.x + p.w + ball.r + 0.1
+          else ball.x = p.x - ball.r - 0.1
+        }
+      }
+      hitPaddle(player)
+      hitPaddle(cpu)
+
+      // score
+      if(ball.x + ball.r < 0){ // cpu scores
+        scoreC++
+        scoreCElem.textContent = scoreC
+        running = false
+        resetBall(1)
+        setTimeout(()=> running = true, 700)
+      }
+      if(ball.x - ball.r > canvas.width){ // player scores
+        scoreP++
+        scorePElem.textContent = scoreP
+        running = false
+        resetBall(-1)
+        setTimeout(()=> running = true, 700)
+      }
+
+      updateCPU()
+    }
+
+    function draw(){
+      // clear
+      ctx.clearRect(0,0,canvas.width,canvas.height)
+
+      // midline
+      ctx.fillStyle = 'rgba(255,255,255,0.06)'
+      const seg = 12
+      for(let y=0;y<canvas.height;y+=seg*2){ ctx.fillRect(canvas.width/2 - 2, y, 4, seg) }
+
+      // paddles
+      ctx.fillStyle = '#e6eef8'
+      ctx.fillRect(player.x, player.y, player.w, player.h)
+      ctx.fillRect(cpu.x, cpu.y, cpu.w, cpu.h)
+
+      // ball
+      ctx.beginPath()
+      ctx.arc(ball.x, ball.y, ball.r, 0, Math.PI*2)
+      ctx.fill()
+
+      // scoreboard small
+      ctx.font = '14px system-ui'
+      ctx.fillStyle = 'rgba(255,255,255,0.5)'
+      ctx.textAlign = 'left'
+      ctx.fillText('Touch: ▲/▼ or drag left paddle', 10, 18)
+    }
+
+    function loop(){
+      update()
+      draw()
+      requestAnimationFrame(loop)
+    }
+
+    // start/resume/reset buttons
+    document.getElementById('startBtn').addEventListener('click', ()=>{ running = true })
+    document.getElementById('resetBtn').addEventListener('click', ()=>{ resetGame(); running=false })
+
+    // Keyboard controls
+    window.addEventListener('keydown', (e)=>{
+      if(e.key === 'ArrowUp' || e.key === 'w' || e.key === 'W') player.dy = -6
+      if(e.key === 'ArrowDown' || e.key === 's' || e.key === 'S') player.dy = 6
+      if(e.key === ' ') running = !running
+    })
+    window.addEventListener('keyup', (e)=>{
+      if(['ArrowUp','ArrowDown','w','W','s','S'].includes(e.key)) player.dy = 0
+    })
+
+    // Touch buttons
+    function makeTouchButton(id, dyValue){
+      const el = document.getElementById(id)
+      let active = false
+      const start = (ev)=>{ ev.preventDefault(); active = true; player.dy = dyValue }
+      const end = (ev)=>{ ev.preventDefault(); active = false; if(player.dy === dyValue) player.dy = 0 }
+
+      el.addEventListener('touchstart', start)
+      el.addEventListener('touchend', end)
+      el.addEventListener('touchcancel', end)
+      // pointer support for mouse and stylus
+      el.addEventListener('pointerdown', start)
+      el.addEventListener('pointerup', end)
+      el.addEventListener('pointercancel', end)
+    }
+    makeTouchButton('pUp', -6)
+    makeTouchButton('pDown', 6)
+    // Right side controls (for second player on same device)
+    makeTouchButton('rUp', -6) // we will route these to cpu as manual control
+    makeTouchButton('rDown', 6)
+
+    // If right side buttons are used, control the right paddle instead of cpu
+    // Attach event listeners to override CPU while pressing
+    const rUp = document.getElementById('rUp')
+    const rDown = document.getElementById('rDown')
+    let rightDy = 0
+    const startRight = (ev, val)=>{ ev.preventDefault(); rightDy = val }
+    const endRight = (ev)=>{ ev.preventDefault(); rightDy = 0 }
+    rUp.addEventListener('touchstart', (e)=> startRight(e, -6)); rUp.addEventListener('touchend', endRight); rUp.addEventListener('pointerdown', (e)=> startRight(e, -6)); rUp.addEventListener('pointerup', endRight)
+    rDown.addEventListener('touchstart', (e)=> startRight(e, 6)); rDown.addEventListener('touchend', endRight); rDown.addEventListener('pointerdown', (e)=> startRight(e, 6)); rDown.addEventListener('pointerup', endRight)
+
+    // In updateCPU, if rightDy != 0, use it to move right paddle
+    const origUpdateCPU = updateCPU
+    updateCPU = function(){
+      if(rightDy !== 0){ cpu.y += rightDy; cpu.y = Math.max(0, Math.min(canvas.height - cpu.h, cpu.y)); return }
+      origUpdateCPU()
+    }
+
+    // Dragging left paddle with touch/mouse
+    let dragging = false
+    canvas.addEventListener('pointerdown', (e)=>{
+      const rect = canvas.getBoundingClientRect()
+      const x = e.clientX - rect.left
+      const y = e.clientY - rect.top
+      // if near left paddle, start drag
+      if(x >= player.x - 30 && x <= player.x + player.w + 30 && y >= player.y - 30 && y <= player.y + player.h + 30){
+        dragging = true
+        canvas.setPointerCapture(e.pointerId)
+      }
+    })
+    canvas.addEventListener('pointermove', (e)=>{
+      if(!dragging) return
+      const rect = canvas.getBoundingClientRect()
+      const y = e.clientY - rect.top
+      player.y = y - player.h/2
+      clampPaddles()
+    })
+    canvas.addEventListener('pointerup', (e)=>{ dragging = false })
+    canvas.addEventListener('pointercancel', (e)=>{ dragging = false })
+
+    // initial setup
+    resetBall( Math.random() > 0.5 ? 1 : -1 )
+    draw()
+    loop()
+
+    // keep paddles/bounds responsive when canvas resizes
+    const resizeObserver = new ResizeObserver(()=>{
+      // reposition paddles proportionally
+      player.y = Math.max(0, Math.min(canvas.height - player.h, player.y))
+      cpu.x = canvas.width - 20 - cpu.w
+      resetBall(Math.sign(ball.vx) || 1)
+    })
+    resizeObserver.observe(canvas)
+  </script>
+</body>
+</html>
